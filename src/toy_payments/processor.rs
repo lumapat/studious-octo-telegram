@@ -27,15 +27,10 @@ pub struct Transaction {
     amount: Amount,
 }
 
-#[derive(Serialize, Debug)]
+#[derive(Debug)]
 pub struct Account {
-    #[serde(rename = "available", serialize_with = "serialize_amount")]
     available_funds: Amount,
-    #[serde(rename = "held", serialize_with = "serialize_amount")]
     held_funds: Amount,
-    #[serde(rename = "total", serialize_with = "serialize_amount")]
-    total_funds: Amount,
-    #[serde(rename = "locked")]
     is_locked: bool,
 }
 
@@ -44,7 +39,6 @@ impl Account {
         Self {
             available_funds: 0,
             held_funds: 0,
-            total_funds: 0,
             is_locked: false,
         }
     }
@@ -76,12 +70,10 @@ impl PaymentProcessor {
         match transaction.ty {
             TransactionType::Deposit => {
                 account.available_funds += transaction.amount;
-                account.total_funds = account.available_funds + account.held_funds;
             }
             TransactionType::Withdrawal => {
                 if account.available_funds >= transaction.amount {
                     account.available_funds -= transaction.amount;
-                    account.total_funds = account.available_funds + account.held_funds;
                 }
             }
             // TODO: These for later
@@ -105,10 +97,18 @@ impl PaymentProcessor {
             available_funds: Amount,
             #[serde(rename = "held", serialize_with = "serialize_amount")]
             held_funds: Amount,
-            #[serde(rename = "total", serialize_with = "serialize_amount")]
+            #[serde(rename = "total", serialize_with = "serialize_total")]
             total_funds: Amount,
             #[serde(rename = "locked")]
             is_locked: bool,
+        }
+
+        fn serialize_total<S>(amount: &Amount, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            let amount_float = *amount as f64 / 10000.0;
+            serializer.serialize_f64(amount_float)
         }
 
         for client_id in self.accounts.keys() {
@@ -117,7 +117,7 @@ impl PaymentProcessor {
                 client_id: *client_id,
                 available_funds: account.available_funds,
                 held_funds: account.held_funds,
-                total_funds: account.total_funds,
+                total_funds: account.available_funds + account.held_funds,
                 is_locked: account.is_locked,
             })?;
         }
