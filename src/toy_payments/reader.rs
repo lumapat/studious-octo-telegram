@@ -1,7 +1,7 @@
 use std::{fs::File, path::PathBuf};
 
 use super::Transaction;
-use csv::{Reader, ReaderBuilder};
+use csv::{DeserializeRecordsIter, Reader, ReaderBuilder};
 
 pub struct TransactionReader {
     reader: Reader<File>,
@@ -17,18 +17,8 @@ impl TransactionReader {
         Ok(Self { reader })
     }
 
-    pub fn read_all(&mut self) -> Result<Vec<Transaction>, Box<dyn std::error::Error>> {
-        let mut txns: Vec<Transaction> = Vec::new();
-
-        for result in self.reader.deserialize().into_iter() {
-            match result {
-                Ok(txn) => txns.push(txn),
-                Err(err) => {
-                    return Err(Box::new(err));
-                }
-            }
-        }
-
-        Ok(txns)
+    // Expose an iter() here so we can stream CSV records
+    pub fn iter(&mut self) -> DeserializeRecordsIter<'_, File, Transaction> {
+        self.reader.deserialize()
     }
 }

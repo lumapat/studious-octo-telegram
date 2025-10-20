@@ -23,21 +23,23 @@ fn main() {
 
     let mut processor = PaymentProcessor::new();
     match TransactionReader::from_path(args.input_file) {
-        Ok(mut reader) => match reader.read_all() {
-            Ok(txns) => {
-                for txn in &txns {
-                    if args.debug {
-                        eprintln!("Processing: {}", txn);
+        Ok(mut reader) => {
+            for result in reader.iter() {
+                match result {
+                    Ok(txn) => {
+                        if args.debug {
+                            eprintln!("Processing: {}", txn);
+                        }
+                        processor.process(&txn);
                     }
-                    processor.process(txn);
-                }
-
-                if let Err(err) = processor.dump_csv() {
-                    eprintln!("Error writing CSV output: {}", err);
+                    Err(err) => eprintln!("Error reading transaction: {}", err),
                 }
             }
-            Err(err) => eprintln!("Error reading transactions: {}", err),
-        },
+
+            if let Err(err) = processor.dump_csv() {
+                eprintln!("Error writing CSV output: {}", err);
+            }
+        }
         Err(err) => eprintln!("Error opening file: {}", err),
     }
 }
