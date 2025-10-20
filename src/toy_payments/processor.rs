@@ -171,3 +171,63 @@ impl fmt::Display for Transaction {
         )
     }
 }
+
+impl Transaction {
+    pub fn new(
+        ty: TransactionType,
+        client_id: ClientId,
+        transaction_id: u32,
+        amount: Amount,
+    ) -> Self {
+        Self {
+            ty,
+            client_id,
+            transaction_id,
+            amount,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_deposit_only() {
+        let mut processor = PaymentProcessor::new();
+
+        processor.process(&Transaction::new(TransactionType::Deposit, 1, 1, 1_0000));
+        processor.process(&Transaction::new(TransactionType::Deposit, 1, 2, 2_0000));
+
+        let account = &processor.accounts[&1];
+        assert_eq!(account.available_funds, 3_0000);
+        assert_eq!(account.held_funds, 0);
+    }
+
+    #[test]
+    fn test_withdraw() {
+        let mut processor = PaymentProcessor::new();
+
+        processor.process(&Transaction::new(TransactionType::Deposit, 1, 1, 5_0000));
+        processor.process(&Transaction::new(TransactionType::Withdrawal, 1, 2, 1_5000));
+
+        let account = &processor.accounts[&1];
+        assert_eq!(account.available_funds, 3_5000);
+        assert_eq!(account.held_funds, 0);
+    }
+
+    #[test]
+    fn test_withdraw_deposit() {
+        let mut processor = PaymentProcessor::new();
+
+        processor.process(&Transaction::new(TransactionType::Deposit, 1, 1, 1_0000));
+        processor.process(&Transaction::new(TransactionType::Deposit, 1, 2, 2_0000));
+        processor.process(&Transaction::new(TransactionType::Withdrawal, 1, 3, 1_5000));
+        processor.process(&Transaction::new(TransactionType::Deposit, 1, 4, 5_000));
+        processor.process(&Transaction::new(TransactionType::Withdrawal, 1, 5, 8_000));
+
+        let account = &processor.accounts[&1];
+        assert_eq!(account.available_funds, 1_2000);
+        assert_eq!(account.held_funds, 0);
+    }
+}
