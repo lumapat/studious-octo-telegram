@@ -2,8 +2,9 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashMap;
 use std::fmt;
 
+use super::amount::Amount;
+
 type ClientId = u16;
-type Amount = u64;
 
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "lowercase")]
@@ -37,8 +38,8 @@ pub struct Account {
 impl Account {
     pub fn new() -> Self {
         Self {
-            available_funds: 0,
-            held_funds: 0,
+            available_funds: Amount::from(0),
+            held_funds: Amount::from(0),
             is_locked: false,
         }
     }
@@ -107,7 +108,7 @@ impl PaymentProcessor {
         where
             S: Serializer,
         {
-            let amount_float = *amount as f64 / 10000.0;
+            let amount_float: f64 = (*amount).into();
             serializer.serialize_f64(amount_float)
         }
 
@@ -138,14 +139,14 @@ where
     D: Deserializer<'de>,
 {
     let amount_float: f64 = Deserialize::deserialize(deserializer)?;
-    Ok((amount_float * 10000.0) as Amount)
+    Ok(Amount::from(amount_float))
 }
 
 pub fn serialize_amount<S>(amount: &Amount, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: Serializer,
 {
-    let amount_float = *amount as f64 / 10000.0;
+    let amount_float: f64 = (*amount).into();
     serializer.serialize_f64(amount_float)
 }
 
@@ -163,7 +164,7 @@ impl fmt::Display for TransactionType {
 
 impl fmt::Display for Transaction {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let amount_float = self.amount as f64 / 10000.0;
+        let amount_float: f64 = self.amount.into();
         write!(
             f,
             "type: {}, client: {}, tx: {}, amount: {:.4}",
@@ -196,38 +197,83 @@ mod tests {
     fn test_deposit_only() {
         let mut processor = PaymentProcessor::new();
 
-        processor.process(&Transaction::new(TransactionType::Deposit, 1, 1, 1_0000));
-        processor.process(&Transaction::new(TransactionType::Deposit, 1, 2, 2_0000));
+        processor.process(&Transaction::new(
+            TransactionType::Deposit,
+            1,
+            1,
+            Amount::from(1),
+        ));
+        processor.process(&Transaction::new(
+            TransactionType::Deposit,
+            1,
+            2,
+            Amount::from(2),
+        ));
 
         let account = &processor.accounts[&1];
-        assert_eq!(account.available_funds, 3_0000);
-        assert_eq!(account.held_funds, 0);
+        assert_eq!(account.available_funds, Amount::from(3));
+        assert_eq!(account.held_funds, Amount::from(0));
     }
 
     #[test]
     fn test_withdraw() {
         let mut processor = PaymentProcessor::new();
 
-        processor.process(&Transaction::new(TransactionType::Deposit, 1, 1, 5_0000));
-        processor.process(&Transaction::new(TransactionType::Withdrawal, 1, 2, 1_5000));
+        processor.process(&Transaction::new(
+            TransactionType::Deposit,
+            1,
+            1,
+            Amount::from(5),
+        ));
+        processor.process(&Transaction::new(
+            TransactionType::Withdrawal,
+            1,
+            2,
+            Amount::from(1.5),
+        ));
 
         let account = &processor.accounts[&1];
-        assert_eq!(account.available_funds, 3_5000);
-        assert_eq!(account.held_funds, 0);
+        assert_eq!(account.available_funds, Amount::from(3.5));
+        assert_eq!(account.held_funds, Amount::from(0));
     }
 
     #[test]
     fn test_withdraw_deposit() {
         let mut processor = PaymentProcessor::new();
 
-        processor.process(&Transaction::new(TransactionType::Deposit, 1, 1, 1_0000));
-        processor.process(&Transaction::new(TransactionType::Deposit, 1, 2, 2_0000));
-        processor.process(&Transaction::new(TransactionType::Withdrawal, 1, 3, 1_5000));
-        processor.process(&Transaction::new(TransactionType::Deposit, 1, 4, 5_000));
-        processor.process(&Transaction::new(TransactionType::Withdrawal, 1, 5, 8_000));
+        processor.process(&Transaction::new(
+            TransactionType::Deposit,
+            1,
+            1,
+            Amount::from(1),
+        ));
+        processor.process(&Transaction::new(
+            TransactionType::Deposit,
+            1,
+            2,
+            Amount::from(2),
+        ));
+        processor.process(&Transaction::new(
+            TransactionType::Withdrawal,
+            1,
+            3,
+            Amount::from(1.5),
+        ));
+        processor.process(&Transaction::new(
+            TransactionType::Deposit,
+            1,
+            4,
+            Amount::from(0.5),
+        ));
+        processor.process(&Transaction::new(
+            TransactionType::Withdrawal,
+            1,
+            5,
+            Amount::from(0.8),
+        ));
 
         let account = &processor.accounts[&1];
-        assert_eq!(account.available_funds, 1_2000);
-        assert_eq!(account.held_funds, 0);
+        assert_eq!(account.available_funds, Amount::from(1.2));
+        assert_eq!(account.held_funds, Amount::from(0));
     }
 }
