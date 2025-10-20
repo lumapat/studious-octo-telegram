@@ -207,6 +207,7 @@ impl fmt::Display for Transaction {
 }
 
 impl Transaction {
+    #[cfg(test)]
     pub fn new(
         ty: TransactionType,
         client_id: ClientId,
