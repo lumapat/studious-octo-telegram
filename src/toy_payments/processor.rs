@@ -81,14 +81,17 @@ impl PaymentProcessor {
         match transaction.ty {
             TransactionType::Deposit => {
                 let account = self.get_account(transaction.client_id);
-                account.available_funds += transaction.amount;
-                self.store_transaction(transaction.transaction_id, transaction.amount);
+                // See test for details why we skip locked accounts
+                if !account.is_locked {
+                    account.available_funds += transaction.amount;
+                    self.store_transaction(transaction.transaction_id, transaction.amount);
+                }
             }
             TransactionType::Withdrawal => {
                 let account = self.get_account(transaction.client_id);
                 // Only process withdrawal if there are sufficient available funds
                 // Ignore any withdrawals that go beyond the available amount (per requirements)
-                if account.available_funds >= transaction.amount {
+                if !account.is_locked && account.available_funds >= transaction.amount {
                     account.available_funds -= transaction.amount;
                     // We can represent withdrawals as negative amounts, so we only need to store
                     // the amount and its transaction ID for a more compressed log
@@ -517,6 +520,52 @@ mod tests {
             let account_after = &processor.accounts[&1];
             assert_eq!(account_after.available_funds, available_before);
             assert_eq!(account_after.held_funds, held_before);
+        }
+    }
+
+    // This isn't specified directly in the requirements
+    // but this seems to be one of the "sensible requirements"
+    // for a bank account
+    #[test]
+    fn test_skip_transactions_on_locked() {
+        let transaction_types = vec![
+            (TransactionType::Deposit, Amount::from(50)),
+            (TransactionType::Withdrawal, Amount::from(25)),
+        ];
+
+        for (tx_type, amount) in transaction_types {
+            let mut processor = PaymentProcessor::new();
+
+            processor.process(&Transaction::new(
+                TransactionType::Deposit,
+                1,
+                1,
+                Amount::from(100),
+            ));
+            processor.process(&Transaction::new(
+                TransactionType::Dispute,
+                1,
+                1,
+                Amount::from(0),
+            ));
+            processor.process(&Transaction::new(
+                TransactionType::Chargeback,
+                1,
+                1,
+                Amount::from(0),
+            ));
+
+            let account_before = &processor.accounts[&1];
+            assert_eq!(account_before.is_locked, true);
+            let available_before = account_before.available_funds;
+            let held_before = account_before.held_funds;
+
+            processor.process(&Transaction::new(tx_type, 1, 2, amount));
+
+            let account_after = &processor.accounts[&1];
+            assert_eq!(account_after.available_funds, available_before);
+            assert_eq!(account_after.held_funds, held_before);
+            assert_eq!(account_after.is_locked, true);
         }
     }
 }
