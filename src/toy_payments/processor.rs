@@ -86,10 +86,14 @@ impl PaymentProcessor {
             }
             TransactionType::Withdrawal => {
                 let account = self.get_account(transaction.client_id);
-                account.available_funds -= transaction.amount;
-                // We can represent withdrawals as negative amounts, so we only need to store
-                // the amount and its transaction ID for a more compressed log
-                self.store_transaction(transaction.transaction_id, -transaction.amount);
+                // Only process withdrawal if there are sufficient available funds
+                // Ignore any withdrawals that go beyond the available amount (per requirements)
+                if account.available_funds >= transaction.amount {
+                    account.available_funds -= transaction.amount;
+                    // We can represent withdrawals as negative amounts, so we only need to store
+                    // the amount and its transaction ID for a more compressed log
+                    self.store_transaction(transaction.transaction_id, -transaction.amount);
+                }
             }
             TransactionType::Dispute => {
                 if let Some(txn_amount) = self.find_transaction(transaction.transaction_id).copied()
@@ -223,6 +227,8 @@ impl Transaction {
     }
 }
 
+// Tests aren't exhaustive here, but captured mostly
+// the important ones that are defined in the requirements
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -268,6 +274,29 @@ mod tests {
 
         let account = &processor.accounts[&1];
         assert_eq!(account.available_funds, Amount::from(3.5));
+        assert_eq!(account.held_funds, Amount::from(0));
+    }
+
+    #[test]
+    fn test_withdrawal_insufficient_funds() {
+        let mut processor = PaymentProcessor::new();
+
+        processor.process(&Transaction::new(
+            TransactionType::Deposit,
+            1,
+            1,
+            Amount::from(10),
+        ));
+
+        processor.process(&Transaction::new(
+            TransactionType::Withdrawal,
+            1,
+            2,
+            Amount::from(15),
+        ));
+
+        let account = &processor.accounts[&1];
+        assert_eq!(account.available_funds, Amount::from(10));
         assert_eq!(account.held_funds, Amount::from(0));
     }
 
