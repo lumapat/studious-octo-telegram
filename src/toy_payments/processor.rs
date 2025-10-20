@@ -116,6 +116,7 @@ impl PaymentProcessor {
                 {
                     let account = self.get_account(transaction.client_id);
                     account.held_funds -= txn_amount;
+                    account.is_locked = true;
                 }
             }
         }
@@ -445,6 +446,7 @@ mod tests {
         let account = &processor.accounts[&1];
         assert_eq!(account.available_funds, Amount::from(0));
         assert_eq!(account.held_funds, Amount::from(0));
+        assert_eq!(account.is_locked, true);
     }
 
     #[test]
@@ -485,6 +487,7 @@ mod tests {
         let account = &processor.accounts[&1];
         assert_eq!(account.available_funds, Amount::from(150));
         assert_eq!(account.held_funds, Amount::from(0));
+        assert_eq!(account.is_locked, true);
     }
 
     #[test]
