@@ -4,6 +4,7 @@ use std::fmt;
 
 use super::amount::Amount;
 
+type TransactionId = u32;
 type ClientId = u16;
 
 #[derive(Deserialize, Debug)]
@@ -23,7 +24,7 @@ pub struct Transaction {
     #[serde(rename = "client")]
     client_id: ClientId,
     #[serde(rename = "tx")]
-    transaction_id: u32,
+    transaction_id: TransactionId,
     #[serde(deserialize_with = "deserialize_amount")]
     amount: Amount,
 }
@@ -53,34 +54,66 @@ impl Default for Account {
 
 pub struct PaymentProcessor {
     accounts: HashMap<ClientId, Account>,
+    compressed_transactions: HashMap<TransactionId, Amount>,
 }
 
 impl PaymentProcessor {
     pub fn new() -> Self {
         Self {
             accounts: HashMap::new(),
+            compressed_transactions: HashMap::new(),
         }
     }
 
-    pub fn process(&mut self, transaction: &Transaction) {
-        let account = self
-            .accounts
-            .entry(transaction.client_id)
-            .or_insert_with(Account::new);
+    fn find_transaction(&self, transaction_id: TransactionId) -> Option<&Amount> {
+        self.compressed_transactions.get(&transaction_id)
+    }
 
+    fn store_transaction(&mut self, transaction_id: TransactionId, amount: Amount) {
+        self.compressed_transactions.insert(transaction_id, amount);
+    }
+
+    fn get_account(&mut self, client_id: ClientId) -> &mut Account {
+        self.accounts.entry(client_id).or_insert_with(Account::new)
+    }
+
+    pub fn process(&mut self, transaction: &Transaction) {
         match transaction.ty {
             TransactionType::Deposit => {
+                let account = self.get_account(transaction.client_id);
                 account.available_funds += transaction.amount;
+                self.store_transaction(transaction.transaction_id, transaction.amount);
             }
             TransactionType::Withdrawal => {
-                if account.available_funds >= transaction.amount {
-                    account.available_funds -= transaction.amount;
+                let account = self.get_account(transaction.client_id);
+                account.available_funds -= transaction.amount;
+                // We can represent withdrawals as negative amounts, so we only need to store
+                // the amount and its transaction ID for a more compressed log
+                self.store_transaction(transaction.transaction_id, -transaction.amount);
+            }
+            TransactionType::Dispute => {
+                if let Some(txn_amount) = self.find_transaction(transaction.transaction_id).copied()
+                {
+                    let account = self.get_account(transaction.client_id);
+                    account.available_funds -= txn_amount;
+                    account.held_funds += txn_amount;
                 }
             }
-            // TODO: These for later
-            TransactionType::Dispute => {}
-            TransactionType::Resolve => {}
-            TransactionType::Chargeback => {}
+            TransactionType::Resolve => {
+                if let Some(txn_amount) = self.find_transaction(transaction.transaction_id).copied()
+                {
+                    let account = self.get_account(transaction.client_id);
+                    account.available_funds += txn_amount;
+                    account.held_funds -= txn_amount;
+                }
+            }
+            TransactionType::Chargeback => {
+                if let Some(txn_amount) = self.find_transaction(transaction.transaction_id).copied()
+                {
+                    let account = self.get_account(transaction.client_id);
+                    account.held_funds -= txn_amount;
+                }
+            }
         }
     }
 
@@ -177,7 +210,7 @@ impl Transaction {
     pub fn new(
         ty: TransactionType,
         client_id: ClientId,
-        transaction_id: u32,
+        transaction_id: TransactionId,
         amount: Amount,
     ) -> Self {
         Self {
@@ -274,6 +307,153 @@ mod tests {
 
         let account = &processor.accounts[&1];
         assert_eq!(account.available_funds, Amount::from(1.2));
+        assert_eq!(account.held_funds, Amount::from(0));
+    }
+
+    #[test]
+    fn test_deposit_withdraw_dispute() {
+        let mut processor = PaymentProcessor::new();
+
+        processor.process(&Transaction::new(
+            TransactionType::Deposit,
+            1,
+            1,
+            Amount::from(10),
+        ));
+        processor.process(&Transaction::new(
+            TransactionType::Withdrawal,
+            1,
+            2,
+            Amount::from(3),
+        ));
+        processor.process(&Transaction::new(
+            TransactionType::Dispute,
+            1,
+            2,
+            Amount::from(0),
+        ));
+
+        let account = &processor.accounts[&1];
+        assert_eq!(account.available_funds, Amount::from(10));
+        // Negative since we're holding back a withdrawal
+        assert_eq!(account.held_funds, -Amount::from(3));
+    }
+
+    #[test]
+    fn test_deposit_dispute() {
+        let mut processor = PaymentProcessor::new();
+
+        processor.process(&Transaction::new(
+            TransactionType::Deposit,
+            1,
+            1,
+            Amount::from(10),
+        ));
+        processor.process(&Transaction::new(
+            TransactionType::Dispute,
+            1,
+            1,
+            Amount::from(0),
+        ));
+
+        let account = &processor.accounts[&1];
+        assert_eq!(account.available_funds, Amount::from(0));
+        assert_eq!(account.held_funds, Amount::from(10));
+    }
+
+    #[test]
+    fn test_deposit_dispute_resolve() {
+        let mut processor = PaymentProcessor::new();
+
+        processor.process(&Transaction::new(
+            TransactionType::Deposit,
+            1,
+            1,
+            Amount::from(10),
+        ));
+        processor.process(&Transaction::new(
+            TransactionType::Dispute,
+            1,
+            1,
+            Amount::from(0),
+        ));
+        processor.process(&Transaction::new(
+            TransactionType::Resolve,
+            1,
+            1,
+            Amount::from(0),
+        ));
+
+        let account = &processor.accounts[&1];
+        assert_eq!(account.available_funds, Amount::from(10));
+        assert_eq!(account.held_funds, Amount::from(0));
+    }
+
+    #[test]
+    fn test_deposit_dispute_chargeback() {
+        let mut processor = PaymentProcessor::new();
+
+        processor.process(&Transaction::new(
+            TransactionType::Deposit,
+            1,
+            1,
+            Amount::from(10),
+        ));
+        processor.process(&Transaction::new(
+            TransactionType::Dispute,
+            1,
+            1,
+            Amount::from(0),
+        ));
+        processor.process(&Transaction::new(
+            TransactionType::Chargeback,
+            1,
+            1,
+            Amount::from(0),
+        ));
+
+        let account = &processor.accounts[&1];
+        assert_eq!(account.available_funds, Amount::from(0));
+        assert_eq!(account.held_funds, Amount::from(0));
+    }
+
+    #[test]
+    fn test_deposit_withdraw_deposit_dispute_withdrawal_chargeback() {
+        let mut processor = PaymentProcessor::new();
+
+        processor.process(&Transaction::new(
+            TransactionType::Deposit,
+            1,
+            1,
+            Amount::from(100),
+        ));
+        processor.process(&Transaction::new(
+            TransactionType::Withdrawal,
+            1,
+            2,
+            Amount::from(20),
+        ));
+        processor.process(&Transaction::new(
+            TransactionType::Deposit,
+            1,
+            3,
+            Amount::from(50),
+        ));
+        processor.process(&Transaction::new(
+            TransactionType::Dispute,
+            1,
+            2,
+            Amount::from(0),
+        ));
+        processor.process(&Transaction::new(
+            TransactionType::Chargeback,
+            1,
+            2,
+            Amount::from(0),
+        ));
+
+        let account = &processor.accounts[&1];
+        assert_eq!(account.available_funds, Amount::from(150));
         assert_eq!(account.held_funds, Amount::from(0));
     }
 }
