@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use clap::Parser;
 
 mod toy_payments;
-use toy_payments::TransactionReader;
+use toy_payments::{PaymentProcessor, TransactionReader};
 
 /// Processes an input CSV file of payments transactions
 /// and outputs a CSV file of outstanding account balances
@@ -21,9 +21,21 @@ struct Args {
 fn main() {
     let args = Args::parse();
 
+    let mut processor = PaymentProcessor::new();
     match TransactionReader::from_path(args.input_file) {
         Ok(mut reader) => match reader.read_all() {
-            Ok(txns) => txns.iter().for_each(|txn| println!("{}", txn)),
+            Ok(txns) => {
+                for txn in &txns {
+                    if args.debug {
+                        eprintln!("Processing: {}", txn);
+                    }
+                    processor.process(txn);
+                }
+
+                if let Err(err) = processor.dump_csv() {
+                    eprintln!("Error writing CSV output: {}", err);
+                }
+            }
             Err(err) => eprintln!("Error reading transactions: {}", err),
         },
         Err(err) => eprintln!("Error opening file: {}", err),
