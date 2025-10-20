@@ -486,4 +486,34 @@ mod tests {
         assert_eq!(account.available_funds, Amount::from(150));
         assert_eq!(account.held_funds, Amount::from(0));
     }
+
+    #[test]
+    fn test_invalid_transaction_id_no_state_change() {
+        let transaction_types = vec![
+            TransactionType::Dispute,
+            TransactionType::Resolve,
+            TransactionType::Chargeback,
+        ];
+
+        for tx_type in transaction_types {
+            let mut processor = PaymentProcessor::new();
+
+            processor.process(&Transaction::new(
+                TransactionType::Deposit,
+                1,
+                1,
+                Amount::from(100),
+            ));
+
+            let account_before = &processor.accounts[&1];
+            let available_before = account_before.available_funds;
+            let held_before = account_before.held_funds;
+
+            processor.process(&Transaction::new(tx_type, 1, 999, Amount::from(0)));
+
+            let account_after = &processor.accounts[&1];
+            assert_eq!(account_after.available_funds, available_before);
+            assert_eq!(account_after.held_funds, held_before);
+        }
+    }
 }
