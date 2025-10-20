@@ -17,6 +17,9 @@ pub enum TransactionType {
     Withdrawal,
 }
 
+// NOTE: I think it makes more sense to eliminate Amount
+// for certain types and require Amount for others
+// since the type feels much more like an enum
 #[derive(Deserialize, Debug)]
 pub struct Transaction {
     #[serde(rename = "type")]
@@ -125,6 +128,9 @@ impl PaymentProcessor {
         }
     }
 
+    // NOTE: Would like to improve on how/where this is defined, but for now this
+    // meets the requirements we have for this. As an extension, I'd want to have
+    // some "exporter" that could be styled/formatted/controlled separately.
     pub fn dump_csv(&self) -> Result<(), Box<dyn std::error::Error>> {
         use csv::Writer;
 
