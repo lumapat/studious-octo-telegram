@@ -19,4 +19,5 @@ Some annotations on the resources provided:
 - test-data.csv - Regular test case
 - test-data-2.csv - A bunch of disputes and resolutions
 - test-data-3.csv - Invalid transaction IDs in disputes/chargebacks that silently fail
+- test-data-4.csv - Precision checks
 - bad-transaction.csv - Simple test to see how parsing fails
