@@ -7,21 +7,40 @@ use super::amount::Amount;
 type TransactionId = u32;
 type ClientId = u16;
 
-#[derive(Deserialize, Debug)]
-#[serde(rename_all = "lowercase")]
-pub enum TransactionType {
-    Chargeback,
-    Deposit,
-    Dispute,
-    Resolve,
-    Withdrawal,
+/// Transaction enum where specific types contain
+/// amounts while others just rely on existing
+/// transaction IDs
+#[derive(Debug)]
+pub enum Transaction {
+    Deposit {
+        client_id: ClientId,
+        transaction_id: TransactionId,
+        amount: Amount,
+    },
+    Withdrawal {
+        client_id: ClientId,
+        transaction_id: TransactionId,
+        amount: Amount,
+    },
+    Dispute {
+        client_id: ClientId,
+        transaction_id: TransactionId,
+    },
+    Resolve {
+        client_id: ClientId,
+        transaction_id: TransactionId,
+    },
+    Chargeback {
+        client_id: ClientId,
+        transaction_id: TransactionId,
+    },
 }
 
-// NOTE: I think it makes more sense to eliminate Amount
-// for certain types and require Amount for others
-// since the type feels much more like an enum
-#[derive(Deserialize, Debug)]
-pub struct Transaction {
+/// Dedicated struct for CSV parsing
+/// That way we can be flexible with the values
+/// we receive from the CSV
+#[derive(Deserialize)]
+struct TransactionRow {
     #[serde(rename = "type")]
     ty: TransactionType,
     #[serde(rename = "client")]
@@ -29,7 +48,51 @@ pub struct Transaction {
     #[serde(rename = "tx")]
     transaction_id: TransactionId,
     #[serde(deserialize_with = "deserialize_amount")]
-    amount: Amount,
+    amount: Option<Amount>,
+}
+
+impl<'de> Deserialize<'de> for Transaction {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let row = TransactionRow::deserialize(deserializer)?;
+
+        match row.ty {
+            TransactionType::Deposit => {
+                let amount = row
+                    .amount
+                    .ok_or_else(|| serde::de::Error::custom("missing amount for deposit"))?;
+                Ok(Transaction::Deposit {
+                    client_id: row.client_id,
+                    transaction_id: row.transaction_id,
+                    amount,
+                })
+            }
+            TransactionType::Withdrawal => {
+                let amount = row
+                    .amount
+                    .ok_or_else(|| serde::de::Error::custom("missing amount for withdrawal"))?;
+                Ok(Transaction::Withdrawal {
+                    client_id: row.client_id,
+                    transaction_id: row.transaction_id,
+                    amount,
+                })
+            }
+            TransactionType::Dispute => Ok(Transaction::Dispute {
+                client_id: row.client_id,
+                transaction_id: row.transaction_id,
+            }),
+            TransactionType::Resolve => Ok(Transaction::Resolve {
+                client_id: row.client_id,
+                transaction_id: row.transaction_id,
+            }),
+            TransactionType::Chargeback => Ok(Transaction::Chargeback {
+                client_id: row.client_id,
+                transaction_id: row.transaction_id,
+            }),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -81,46 +144,60 @@ impl PaymentProcessor {
     }
 
     pub fn process(&mut self, transaction: &Transaction) {
-        match transaction.ty {
-            TransactionType::Deposit => {
-                let account = self.get_account(transaction.client_id);
+        match transaction {
+            Transaction::Deposit {
+                client_id,
+                transaction_id,
+                amount,
+            } => {
+                let account = self.get_account(*client_id);
                 // See test for details why we skip locked accounts
                 if !account.is_locked {
-                    account.available_funds += transaction.amount;
-                    self.store_transaction(transaction.transaction_id, transaction.amount);
+                    account.available_funds += *amount;
+                    self.store_transaction(*transaction_id, *amount);
                 }
             }
-            TransactionType::Withdrawal => {
-                let account = self.get_account(transaction.client_id);
+            Transaction::Withdrawal {
+                client_id,
+                transaction_id,
+                amount,
+            } => {
+                let account = self.get_account(*client_id);
                 // Only process withdrawal if there are sufficient available funds
                 // Ignore any withdrawals that go beyond the available amount (per requirements)
-                if !account.is_locked && account.available_funds >= transaction.amount {
-                    account.available_funds -= transaction.amount;
+                if !account.is_locked && account.available_funds >= *amount {
+                    account.available_funds -= *amount;
                     // We can represent withdrawals as negative amounts, so we only need to store
                     // the amount and its transaction ID for a more compressed log
-                    self.store_transaction(transaction.transaction_id, -transaction.amount);
+                    self.store_transaction(*transaction_id, -*amount);
                 }
             }
-            TransactionType::Dispute => {
-                if let Some(txn_amount) = self.find_transaction(transaction.transaction_id).copied()
-                {
-                    let account = self.get_account(transaction.client_id);
+            Transaction::Dispute {
+                client_id,
+                transaction_id,
+            } => {
+                if let Some(txn_amount) = self.find_transaction(*transaction_id).copied() {
+                    let account = self.get_account(*client_id);
                     account.available_funds -= txn_amount;
                     account.held_funds += txn_amount;
                 }
             }
-            TransactionType::Resolve => {
-                if let Some(txn_amount) = self.find_transaction(transaction.transaction_id).copied()
-                {
-                    let account = self.get_account(transaction.client_id);
+            Transaction::Resolve {
+                client_id,
+                transaction_id,
+            } => {
+                if let Some(txn_amount) = self.find_transaction(*transaction_id).copied() {
+                    let account = self.get_account(*client_id);
                     account.available_funds += txn_amount;
                     account.held_funds -= txn_amount;
                 }
             }
-            TransactionType::Chargeback => {
-                if let Some(txn_amount) = self.find_transaction(transaction.transaction_id).copied()
-                {
-                    let account = self.get_account(transaction.client_id);
+            Transaction::Chargeback {
+                client_id,
+                transaction_id,
+            } => {
+                if let Some(txn_amount) = self.find_transaction(*transaction_id).copied() {
+                    let account = self.get_account(*client_id);
                     account.held_funds -= txn_amount;
                     account.is_locked = true;
                 }
@@ -181,12 +258,12 @@ impl Default for PaymentProcessor {
     }
 }
 
-pub fn deserialize_amount<'de, D>(deserializer: D) -> Result<Amount, D::Error>
+pub fn deserialize_amount<'de, D>(deserializer: D) -> Result<Option<Amount>, D::Error>
 where
     D: Deserializer<'de>,
 {
-    let amount_float: f64 = Deserialize::deserialize(deserializer)?;
-    Ok(Amount::from(amount_float))
+    let amount_float: Option<f64> = Deserialize::deserialize(deserializer)?;
+    Ok(amount_float.map(Amount::from))
 }
 
 pub fn serialize_amount<S>(amount: &Amount, serializer: S) -> Result<S::Ok, S::Error>
@@ -197,42 +274,127 @@ where
     serializer.serialize_f64(amount_float)
 }
 
-impl fmt::Display for TransactionType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            TransactionType::Chargeback => write!(f, "chargeback"),
-            TransactionType::Deposit => write!(f, "deposit"),
-            TransactionType::Dispute => write!(f, "dispute"),
-            TransactionType::Resolve => write!(f, "resolve"),
-            TransactionType::Withdrawal => write!(f, "withdrawal"),
-        }
-    }
-}
-
 impl fmt::Display for Transaction {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let amount_float: f64 = self.amount.into();
-        write!(
-            f,
-            "type: {}, client: {}, tx: {}, amount: {:.4}",
-            self.ty, self.client_id, self.transaction_id, amount_float
-        )
+        match self {
+            Transaction::Deposit {
+                client_id,
+                transaction_id,
+                amount,
+            } => {
+                let amount_float: f64 = (*amount).into();
+                write!(
+                    f,
+                    "type: deposit, client: {}, tx: {}, amount: {:.4}",
+                    client_id, transaction_id, amount_float
+                )
+            }
+            Transaction::Withdrawal {
+                client_id,
+                transaction_id,
+                amount,
+            } => {
+                let amount_float: f64 = (*amount).into();
+                write!(
+                    f,
+                    "type: withdrawal, client: {}, tx: {}, amount: {:.4}",
+                    client_id, transaction_id, amount_float
+                )
+            }
+            Transaction::Dispute {
+                client_id,
+                transaction_id,
+            } => {
+                write!(
+                    f,
+                    "type: dispute, client: {}, tx: {}",
+                    client_id, transaction_id
+                )
+            }
+            Transaction::Resolve {
+                client_id,
+                transaction_id,
+            } => {
+                write!(
+                    f,
+                    "type: resolve, client: {}, tx: {}",
+                    client_id, transaction_id
+                )
+            }
+            Transaction::Chargeback {
+                client_id,
+                transaction_id,
+            } => {
+                write!(
+                    f,
+                    "type: chargeback, client: {}, tx: {}",
+                    client_id, transaction_id
+                )
+            }
+        }
     }
 }
 
 impl Transaction {
     #[cfg(test)]
-    pub fn new(
+    fn new(
         ty: TransactionType,
         client_id: ClientId,
         transaction_id: TransactionId,
         amount: Amount,
     ) -> Self {
-        Self {
-            ty,
-            client_id,
-            transaction_id,
-            amount,
+        match ty {
+            TransactionType::Deposit => Transaction::Deposit {
+                client_id,
+                transaction_id,
+                amount,
+            },
+            TransactionType::Withdrawal => Transaction::Withdrawal {
+                client_id,
+                transaction_id,
+                amount,
+            },
+            TransactionType::Dispute => Transaction::Dispute {
+                client_id,
+                transaction_id,
+            },
+            TransactionType::Resolve => Transaction::Resolve {
+                client_id,
+                transaction_id,
+            },
+            TransactionType::Chargeback => Transaction::Chargeback {
+                client_id,
+                transaction_id,
+            },
+        }
+    }
+}
+
+#[derive(Debug)]
+enum TransactionType {
+    Chargeback,
+    Deposit,
+    Dispute,
+    Resolve,
+    Withdrawal,
+}
+
+impl<'de> Deserialize<'de> for TransactionType {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s: String = Deserialize::deserialize(deserializer)?;
+        match s.trim() {
+            "deposit" => Ok(TransactionType::Deposit),
+            "withdrawal" => Ok(TransactionType::Withdrawal),
+            "dispute" => Ok(TransactionType::Dispute),
+            "resolve" => Ok(TransactionType::Resolve),
+            "chargeback" => Ok(TransactionType::Chargeback),
+            _ => Err(serde::de::Error::custom(format!(
+                "unknown transaction type: {}",
+                s
+            ))),
         }
     }
 }

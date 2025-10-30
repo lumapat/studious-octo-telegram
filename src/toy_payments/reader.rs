@@ -10,7 +10,7 @@ pub struct TransactionReader {
 impl TransactionReader {
     pub fn from_path(path: PathBuf) -> Result<Self, Box<dyn std::error::Error>> {
         let reader = ReaderBuilder::new()
-            .flexible(false)
+            .flexible(true)
             .trim(csv::Trim::All)
             .from_path(path)?;
 
