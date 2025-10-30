@@ -13,3 +13,10 @@ Some lasting notes:
     - Alternatively, we can make the sacrifice to TTL a transaction's disputable time so we can minimize the storage of transactions.
   - Clients don't also need to go through the same processor, and they can be sharded (in some way) through different processors. And we can keep a map of client->processor at a higher level.
     - This would just allow for better stream processing of events.
+
+Some annotations on the resources provided:
+
+- test-data.csv - Regular test case
+- test-data-2.csv - A bunch of disputes and resolutions
+- test-data-3.csv - Invalid transaction IDs in disputes/chargebacks that silently fail
+- bad-transaction.csv - Simple test to see how parsing fails
